@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智慧生理監視器 - 檔案識別與 PQRST 渲染平台</title>
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            background-color: #0c1017;
+            color: #e3e8f0;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            width: 100%;
+            max-width: 1200px;
+            background: #141b25;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+        }
+        h1 { color: #00ffcc; text-align: center; margin-bottom: 20px; font-weight: 300; letter-spacing: 1px; }
+        
+        /* 上傳區域 */
+        .upload-container {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 25px;
+        }
+        .upload-section {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            border: 2px dashed #4a5568;
+            border-radius: 8px;
+            background-color: #1a2332;
+            text-align: center;
+            transition: border-color 0.3s;
+        }
+        .upload-section.ready { border-color: #00ffcc; }
+        .upload-section input { margin-top: 10px; color: #fff; }
+        
+        /* 病人資訊面板 */
+        .patient-card {
+            display: none;
+            background: #1e293b;
+            border-left: 5px solid #00ffcc;
+            padding: 15px 20px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+        .patient-header-group {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .patient-card h3 { margin: 0; color: #00ffcc; font-size: 18px; }
+        .patient-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; font-size: 14px; }
+        .info-tag { color: #a0aec0; }
+        .info-val { color: #ffffff; font-weight: bold; font-family: monospace; }
+
+        .control-panel {
+            display: none;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            background: #1e293b;
+            padding: 10px 20px;
+            border-radius: 6px;
+        }
+        .btn-group { display: flex; gap: 10px; align-items: center; }
+        button {
+            background-color: #2d3748;
+            color: #fff;
+            border: 1px solid #4a5568;
+            padding: 8px 18px;
+            font-size: 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        button:hover { background-color: #4a5568; }
+        button.active { background-color: #00ffcc; color: #0c1017; font-weight: bold; border-color: #00ffcc; }
+        
+        /* 按鈕樣式 */
+        .btn-storage { background-color: #e53e3e; border-color: #e53e3e; font-weight: bold; }
+        .btn-storage:hover { background-color: #c53030; }
+        .btn-fhir { background-color: #3182ce; border-color: #3182ce; font-weight: bold; }
+        .btn-fhir:hover { background-color: #2b6cb0; }
+        
+        /* 已同步完成的綠色打勾樣式 */
+        button.synced { background-color: #2ecc71; border-color: #2ecc71; color: #fff; cursor: default; }
+        button.synced:hover { background-color: #2ecc71; }
+
+        .status-bar { font-size: 14px; color: #00ffcc; font-family: monospace; }
+
+        /* 畫布 */
+        .canvas-container {
+            position: relative;
+            background-color: #000000;
+            border-radius: 8px;
+            box-shadow: inset 0 0 20px rgba(0,0,0,0.8);
+            border: 1px solid #2d3748;
+            padding: 10px;
+        }
+        canvas { display: block; width: 100%; height: 430px; }
+
+        .legend {
+            display: none;
+            gap: 20px;
+            justify-content: center;
+            margin-top: 15px;
+            font-size: 14px;
+        }
+        .legend-item { display: flex; align-items: center; gap: 8px; }
+        .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>ECG Real-time Monitor (智慧型身分識別系統)</h1>
+    
+    <div class="upload-container">
+        <div class="upload-section" id="box-hea">
+            <p style="margin: 0; font-size: 15px; font-weight: bold; color: #cbd5e1;">步驟 1: 上傳標頭檔 (.hea)</p>
+            <input type="file" id="heaInput" accept=".hea">
+            <div style="font-size: 12px; color: #718096; margin-top: 5px;" id="heaName">未選取檔案</div>
+        </div>
+        <div class="upload-section" id="box-dat">
+            <p style="margin: 0; font-size: 15px; font-weight: bold; color: #cbd5e1;">步驟 2: 上傳訊號檔 (.dat)</p>
+            <input type="file" id="datInput" accept=".dat" disabled>
+            <div style="font-size: 12px; color: #718096; margin-top: 5px;" id="datName">請先完成步驟 1</div>
+        </div>
+    </div>
+
+    <div class="patient-card" id="patientCard">
+        <div class="patient-header-group">
+            <h3>身分識別報告 (Patient Identity Report)</h3>
+            <button id="btn-create-fhir" class="btn-fhir" onclick="checkAndCreateFhirPatient()">驗證並同步 FHIR Patient</button>
+        </div>
+        <div class="patient-grid">
+            <div><span class="info-tag">紀錄代號：</span><span class="info-val" id="info-id">--</span></div>
+            <div><span class="info-tag">病人年齡：</span><span class="info-val" id="info-age">--</span></div>
+            <div><span class="info-tag">病人性別：</span><span class="info-val" id="info-sex">--</span></div>
+            <div><span class="info-tag">量測日期：</span><span class="info-val" id="info-date">--</span></div>
+        </div>
+    </div>
+
+    <div class="control-panel" id="controlPanel">
+        <div class="btn-group">
+            <button id="btn-raw" onclick="setView('raw')">原始訊號 (含干擾)</button>
+            <button id="btn-filtered" onclick="setView('filtered')">即時濾波 + PQRST 標註</button>
+            <button id="btn-colorwave" onclick="setView('colorwave')" class="active">特徵波段著色模式</button>
+            <button id="btn-save" class="btn-storage" onclick="saveToEcgStorageAndCreateDocRef()">儲存並打包 FHIR Document</button>
+        </div>
+        <div class="status-bar" id="statusBar">等待訊號輸入...</div>
+    </div>
+
+    <div class="canvas-container">
+        <canvas id="ecgCanvas" width="2400" height="900"></canvas>
+    </div>
+
+    <div class="legend" id="waveLegend">
+        <div class="legend-item"><span class="dot" style="background: #ff3333;"></span> R 波頂點 (QRS 複合波)</div>
+        <div class="legend-item"><span class="dot" style="background: #ff9900;"></span> P 波段</div>
+        <div class="legend-item"><span class="dot" style="background: #ffff00;"></span> Q 波段</div>
+        <div class="legend-item"><span class="dot" style="background: #cc33ff;"></span> S 波段</div>
+        <div class="legend-item"><span class="dot" style="background: #33ff33;"></span> T 波段</div>
+    </div>
+</div>
+
+<script>
+let sampleRate = 250; 
+let gain = 200;       
+let recordName = "";
+let patientAge = "未知";
+let patientSex = "未知";
+let ecgDate = "未知";
+let fhirPatientName = "";
+let fhirPatientEmail = "";
+
+let rawSignal = [];      
+let filteredSignal = []; 
+let pqrstPoints = null;
+let currentView = 'colorwave'; 
+
+let selectedDatFile = null;
+let fhirPatientServerId = null; // 儲存最終在伺服器上的實體 Patient ID
+
+// 動態動畫變數
+let animationId = null;
+let currentIndex = 0;      
+const pointsPerFrame = 4;   
+let displayBuffer = [];     
+
+const canvas = document.getElementById('ecgCanvas');
+const ctx = canvas.getContext('2d');
+const axisPadding = { left: 80, right: 30, top: 40, bottom: 60 };
+const graphWidth = canvas.width - axisPadding.left - axisPadding.right;
+const graphHeight = canvas.height - axisPadding.top - axisPadding.bottom;
+
+const themeColors = {
+    base: '#00ffcc',      
+    raw: '#e67e22',       
+    P: '#ff9900',         
+    Q: '#ffff00',         
+    R: '#ff3333',         
+    S: '#cc33ff',         
+    T: '#33ff33'          
+};
+
+// 1. 處理 .hea 檔案讀取
+document.getElementById('heaInput').addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    document.getElementById('heaName').innerText = file.name;
+    document.getElementById('box-hea').classList.add('ready');
+
+    // 切換新檔案時，重設 FHIR 病人狀態
+    fhirPatientServerId = null;
+    const fhirBtn = document.getElementById('btn-create-fhir');
+    fhirBtn.className = "btn-fhir";
+    fhirBtn.innerText = "驗證並同步 FHIR Patient";
+    fhirBtn.disabled = false;
+
+    const reader = new FileReader();
+    reader.onload = function(evt) {
+        parseHeaText(evt.target.result);
+        document.getElementById('datInput').disabled = false;
+        document.getElementById('datName').innerText = "等待選取 .dat 檔案...";
+    };
+    reader.readAsText(file);
+});
+
+function parseHeaText(text) {
+    const lines = text.split('\n');
+    const firstLineParams = lines[0].trim().split(/\s+/);
+    recordName = firstLineParams[0];
+    sampleRate = parseInt(firstLineParams[2]); 
+
+    if (lines.length > 1) {
+        const secondLineParams = lines[1].trim().split(/\s+/);
+        gain = parseFloat(secondLineParams[2].split(/[/(]/)[0]); 
+    }
+
+    patientAge = "未知 (Unknown)";
+    patientSex = "未知 (Unknown)";
+    ecgDate = "未知 (Unknown)";
+
+    lines.forEach(line => {
+        if (line.startsWith('#')) {
+            if (/Age:/i.test(line)) patientAge = line.replace(/#\s*Age:\s*/i, '').trim();
+            if (/Sex:/i.test(line)) {
+                let s = line.replace(/#\s*Sex:\s*/i, '').trim();
+                patientSex = (s.toLowerCase() === 'male') ? '男 (Male)' : (s.toLowerCase() === 'female' ? '女 (Female)' : s);
+            }
+            if (/date:/i.test(line)) ecgDate = line.replace(/#\s*ECG date:\s*/i, '').trim();
+        }
+    });
+
+    document.getElementById('info-id').innerText = recordName;
+    document.getElementById('info-age').innerText = patientAge;
+    document.getElementById('info-sex').innerText = patientSex;
+    document.getElementById('info-date').innerText = ecgDate;
+    document.getElementById('patientCard').style.display = 'block';
+}
+
+// 2. 處理 .dat 檔案讀取
+document.getElementById('datInput').addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    selectedDatFile = file;
+    document.getElementById('datName').innerText = file.name;
+    document.getElementById('box-dat').classList.add('ready');
+    
+    if (animationId) cancelAnimationFrame(animationId);
+
+    const reader = new FileReader();
+    reader.onload = function(evt) {
+        processDatBuffer(evt.target.result);
+    };
+    reader.readAsArrayBuffer(file);
+});
+
+function processDatBuffer(arrayBuffer) {
+    const view = new DataView(arrayBuffer);
+    const bytesPerSample = 2; 
+    const numChannels = 2;    
+    const totalSamples = Math.floor(arrayBuffer.byteLength / (bytesPerSample * numChannels));
+    
+    rawSignal = [];
+    for (let i = 0; i < totalSamples; i++) {
+        let byteOffset = i * bytesPerSample * numChannels;
+        let rawAdc = view.getInt16(byteOffset, true); 
+        rawSignal.push(rawAdc / gain); 
+    }
+
+    filteredSignal = applyBandpassFilter(rawSignal, sampleRate);
+    pqrstPoints = detectPqrstRobust(filteredSignal, sampleRate);
+
+    currentIndex = 0;
+    displayBuffer = new Array(Math.round(graphWidth)).fill(null);
+
+    document.getElementById('controlPanel').style.display = 'flex';
+    document.getElementById('waveLegend').style.display = 'flex';
+    
+    tick();
+}
+
+function applyBandpassFilter(input, fs) {
+    let output = new Array(input.length).fill(0);
+    let dt = 1.0 / fs;
+    let rc_hp = 1.0 / (2 * Math.PI * 0.5);
+    let alpha_hp = rc_hp / (rc_hp + dt);
+    let hp_out = new Array(input.length).fill(0);
+    hp_out[0] = input[0];
+    for(let i=1; i<input.length; i++) hp_out[i] = alpha_hp * (hp_out[i-1] + input[i] - input[i-1]);
+    
+    let rc_lp = 1.0 / (2 * Math.PI * 40);
+    let alpha_lp = dt / (rc_lp + dt);
+    output[0] = hp_out[0];
+    for(let i=1; i<input.length; i++) output[i] = output[i-1] + alpha_lp * (hp_out[i] - output[i-1]);
+    return output;
+}
+
+function detectPqrstRobust(signal, fs) {
+    let rPeaks = [];
+    let maxVal = Math.max(...signal);
+    let avgVal = signal.reduce((a, b) => a + b, 0) / signal.length;
+    let threshold = avgVal + (maxVal - avgVal) * 0.55;
+    if (threshold < 0.35) threshold = 0.35; 
+
+    const windowSize = 6;
+    for (let i = windowSize; i < signal.length - windowSize; i++) {
+        if (signal[i] > threshold) {
+            let isLocalMax = true;
+            for (let w = -windowSize; w <= windowSize; w++) {
+                if (signal[i] < signal[i + w]) { isLocalMax = false; break; }
+            }
+            if (isLocalMax) {
+                if (rPeaks.length === 0 || i - rPeaks[rPeaks.length-1] > fs * 0.25) {
+                    rPeaks.push(i);
+                }
+            }
+        }
+    }
+
+    let points = { P: [], Q: [], R: rPeaks, S: [], T: [] };
+    let waveRanges = [];
+
+    rPeaks.forEach(rIdx => {
+        let qIdx = rIdx; const qWin = Math.round(fs * 0.05);
+        for(let j = rIdx; j > rIdx - qWin; j--) if(j > 0 && signal[j] < signal[qIdx]) qIdx = j;
+        points.Q.push(qIdx);
+
+        let pIdx = qIdx - Math.round(fs * 0.02); const pWin = Math.round(fs * 0.15);
+        for(let j = pIdx; j > qIdx - pWin; j--) if(j > 0 && signal[j] > signal[pIdx]) pIdx = j;
+        points.P.push(pIdx);
+
+        let sIdx = rIdx; const sWin = Math.round(fs * 0.06);
+        for(let j = rIdx; j < rIdx + sWin; j++) if(j < signal.length && signal[j] < signal[sIdx]) sIdx = j;
+        points.S.push(sIdx);
+
+        let tIdx = sIdx + Math.round(fs * 0.04); const tWin = Math.round(fs * 0.30);
+        for(let j = tIdx; j < sIdx + tWin; j++) if(j < signal.length && signal[j] > signal[tIdx]) tIdx = j;
+        points.T.push(tIdx);
+
+        waveRanges.push({
+            pStart: pIdx - Math.round(fs * 0.04), pEnd: qIdx,
+            qStart: qIdx, qEnd: rIdx,
+            rStart: rIdx, rEnd: sIdx,
+            sStart: sIdx, sEnd: sIdx + Math.round(fs * 0.04),
+            tStart: sIdx + Math.round(fs * 0.04), tEnd: tIdx + Math.round(fs * 0.08)
+        });
+    });
+
+    return { peaks: points, ranges: waveRanges };
+}
+
+function tick() {
+    for (let p = 0; p < pointsPerFrame; p++) {
+        if (currentIndex >= rawSignal.length) currentIndex = 0;
+        let screenX = Math.floor((currentIndex % (sampleRate * 4)) / (sampleRate * 4) * graphWidth);
+        let signalSource = (currentView === 'raw') ? rawSignal : filteredSignal;
+        
+        displayBuffer[screenX] = { value: signalSource[currentIndex], dataIdx: currentIndex };
+        for(let w = 1; w <= 25; w++) displayBuffer[(screenX + w) % Math.round(graphWidth)] = null;
+
+        currentIndex++;
+    }
+    drawMonitor();
+    animationId = requestAnimationFrame(tick);
+}
+
+function getWaveColor(dataIdx) {
+    if (!pqrstPoints || !pqrstPoints.ranges) return themeColors.base;
+    
+    for (let i = 0; i < pqrstPoints.ranges.length; i++) {
+        let r = pqrstPoints.ranges[i];
+        if (dataIdx >= r.pStart && dataIdx < r.pEnd) return themeColors.P;
+        if (dataIdx >= r.qStart && dataIdx < r.qEnd) return themeColors.Q;
+        if (dataIdx >= r.rStart && dataIdx < r.rEnd) return themeColors.R;
+        if (dataIdx >= r.sStart && dataIdx < r.sEnd) return themeColors.S;
+        if (dataIdx >= r.tStart && dataIdx < r.tEnd) return themeColors.T;
+    }
+    return themeColors.base;
+}
+
+function drawMonitor() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    ctx.strokeStyle = '#08251b'; ctx.lineWidth = 1;
+    for (let x = axisPadding.left; x <= canvas.width - axisPadding.right; x += 20) {
+        ctx.beginPath(); ctx.moveTo(x, axisPadding.top); ctx.lineTo(x, canvas.height - axisPadding.bottom); ctx.stroke();
+    }
+    for (let y = axisPadding.top; y <= canvas.height - axisPadding.bottom; y += 20) {
+        ctx.beginPath(); ctx.moveTo(axisPadding.left, y); ctx.lineTo(canvas.width - axisPadding.right, y); ctx.stroke();
+    }
+
+    const maxVoltage = 2.5; const totalSeconds = 4;
+    function getScreenY(val) { return axisPadding.top + graphHeight / 2 - (val * (graphHeight / 2) / maxVoltage); }
+
+    ctx.fillStyle = '#a0aec0'; ctx.font = '24px monospace'; ctx.textAlign = 'right';
+    for (let v = -2.0; v <= 2.0; v += 1.0) {
+        let y = getScreenY(v);
+        ctx.fillText(v.toFixed(1) + " mV", axisPadding.left - 15, y + 8);
+    }
+
+    ctx.textAlign = 'center';
+    for (let s = 0; s <= totalSeconds; s += 1) {
+        let x = axisPadding.left + (s / totalSeconds) * graphWidth;
+        ctx.fillText(s + " s", x, canvas.height - axisPadding.bottom + 35);
+    }
+
+    ctx.lineWidth = 4; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    let lastX = null, lastY = null;
+
+    for (let x = 0; x < graphWidth; x++) {
+        let pt = displayBuffer[x];
+        if (!pt) { lastX = null; lastY = null; continue; } 
+
+        let screenX = axisPadding.left + x;
+        let screenY = getScreenY(pt.value);
+
+        let targetColor = themeColors.base;
+        if (currentView === 'raw') {
+            targetColor = themeColors.raw;
+        } else if (currentView === 'colorwave') {
+            targetColor = getWaveColor(pt.dataIdx); 
+        }
+
+        if (lastX !== null) {
+            ctx.beginPath();
+            ctx.moveTo(lastX, lastY);
+            ctx.lineTo(screenX, screenY);
+            ctx.strokeStyle = targetColor;
+            ctx.stroke();
+        }
+
+        lastX = screenX;
+        lastY = screenY;
+    }
+
+    if (currentView === 'filtered' && pqrstPoints) {
+        let peaks = pqrstPoints.peaks;
+        for (let x = 0; x < graphWidth; x++) {
+            let pt = displayBuffer[x]; if (!pt) continue;
+            ['P', 'Q', 'R', 'S', 'T'].forEach(wave => {
+                if (peaks[wave].includes(pt.dataIdx)) {
+                    let screenX = axisPadding.left + x; let screenY = getScreenY(pt.value);
+                    ctx.beginPath(); ctx.arc(screenX, screenY, 7, 0, 2 * Math.PI); ctx.fillStyle = themeColors[wave]; ctx.fill();
+                    ctx.fillStyle = '#ffffff'; ctx.font = 'bold 24px Arial';
+                    let offset = (wave === 'Q' || wave === 'S') ? 35 : -20;
+                    ctx.fillText(wave, screenX, screenY + offset);
+                }
+            });
+        }
+    }
+    
+    let currentSec = (currentIndex / sampleRate).toFixed(1);
+    document.getElementById('statusBar').innerText = `病患 ID: ${recordName} | 時間軸: ${currentSec}s | FS: ${sampleRate}Hz | 顯示: ${currentView.toUpperCase()}`;
+}
+
+function setView(view) {
+    currentView = view;
+    document.getElementById('btn-raw').classList.toggle('active', view === 'raw');
+    document.getElementById('btn-filtered').classList.toggle('active', view === 'filtered');
+    document.getElementById('btn-colorwave').classList.toggle('active', view === 'colorwave');
+}
+
+/// 🏥 同步建立/驗證 FHIR Patient (改用手動輸入姓名、Email，並以 Email 查重)
+function checkAndCreateFhirPatient() {
+    const fhirBtn = document.getElementById('btn-create-fhir');
+    fhirBtn.disabled = true; fhirBtn.innerText = "正在請求用戶輸入資訊...";
+
+    // 💡 步驟 1：不再管 recordName，直接跳彈窗要求輸入「姓名」
+    let customName = "";
+    while (!customName.trim()) {
+        customName = prompt("請輸入病患姓名 (不可空白)：");
+        if (customName === null) { // 使用者點選取消
+            alert("操作已取消。");
+            resetFhirButton();
+            return;
+        }
+    }
+
+    // 💡 步驟 2：跳彈窗要求輸入「Email」並驗證格式
+    let customEmail = "";
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    while (!emailRegex.test(customEmail)) {
+        customEmail = prompt("請輸入病患的 Email 位址 (將作為唯一識別與查重依據)：");
+        if (customEmail === null) { // 使用者點選取消
+            alert("操作已取消。");
+            resetFhirButton();
+            return;
+        }
+        if (!emailRegex.test(customEmail)) {
+            alert("Email 格式不正確，請重新輸入！例如: patient@example.com");
+        }
+    }
+
+    customName = customName.trim();
+    customEmail = customEmail.trim();
+
+    fhirBtn.innerText = "正在檢索伺服器...";
+    
+    // 💡 步驟 3：改用 Email 作為 identifier 查詢條件 (FHIR 標準規範格式為 system|value)
+    // 這裡使用 mailto:作為 system
+    const searchUrl = `https://tzuchi-fhir.ddns.net/fhir/Patient?identifier=${customEmail}`;
+
+    console.log("開始以 Email 檢查病患是否存在，查詢網址:", searchUrl);
+
+    // 透過 GET 檢查此 Email 的病人是否已存在 
+    fetch(searchUrl, {
+        method: 'GET',
+        headers: { 'Accept': 'application/fhir+json' }
+    })
+    .then(response => { if (!response.ok) throw new Error("無法連接 FHIR 伺服器進行查重。"); return response.json(); })
+    .then(bundle => {
+        // 如果伺服器找得到此 Email 綁定的 Patient 
+        if (bundle.resourceType === "Bundle" && bundle.total > 0) {
+            const existingPatient = bundle.entry[0].resource;
+            fhirPatientServerId = existingPatient.id; // 擷取實體 ID 
+            
+            // 如果舊紀錄的姓名跟輸入的不同，提示一下使用者
+            const oldName = existingPatient.name && existingPatient.name[0] ? existingPatient.name[0].text : "未命名";
+
+            alert(`🔍 檢索完畢：此 Email (${customEmail}) 先前已註冊過。\n系統將自動沿用既有病患：${oldName} (伺服器編號: ${fhirPatientServerId})`);
+            setFhirButtonSuccess(`已沿用病患: ${oldName}`);
+            return null; // 中斷 Promise 鏈，不執行後續的 POST
+        } else {
+            // 如果沒找到，執行建立新病人 
+            fhirBtn.innerText = "查無此 Email，建立新病患中...";
+            return executeCreatePatientPost(customName, customEmail);
+        }
+    })
+    .then(newPatientData => {
+        if (newPatientData) {
+            fhirPatientServerId = newPatientData.id;
+            alert(`🎉 新病患建立成功！\n姓名：${customName}\nEmail：${customEmail}\n伺服器分配新 ID: ${fhirPatientServerId}`);
+            setFhirButtonSuccess(`✓ ${customName} 同步成功`);
+        }
+    })
+    .catch(error => { 
+        alert(`❌ FHIR 驗證與建立失敗：\n${error.message}`); 
+        resetFhirButton();
+    });
+}
+
+function executeCreatePatientPost(userName, userEmail) {
+    let fhirGender = "unknown";
+    if (patientSex.includes("男") || patientSex.toLowerCase().includes("male")) fhirGender = "male";
+    else if (patientSex.includes("女") || patientSex.toLowerCase().includes("female")) fhirGender = "female";
+
+    // 💡 安全的出生日期計算，防止產生 NaN-01-01 導致 400 錯誤
+    let birthDateStr = "2000-01-01"; // 預設一個合法的日期
+    let parsedAge = parseInt(patientAge);
+    
+    if (!isNaN(parsedAge)) {
+        let matchYear = ecgDate.match(/\d{4}$/);
+        let measurementYear = matchYear ? parseInt(matchYear[0]) : new Date().getFullYear();
+        let birthYear = measurementYear - parsedAge;
+        birthDateStr = `${birthYear}-01-01`;
+    }
+
+    // 💡 構建更嚴謹、符合標準的 FHIR Patient JSON
+    const fhirPatientResource = {
+        resourceType: "Patient",
+        active: true,
+        identifier: [
+            {
+                use: "official",
+                // 建議使用標準 URL 作為系統識別網域，避免部分伺服器不接受 "mailto"
+                system: "http://tzuchi.org/fhir/patient-email", 
+                value: userEmail
+            }
+        ],
+        name: [
+            { 
+                use: "official", 
+                text: userName 
+            }
+        ],
+        gender: fhirGender,
+        birthDate: birthDateStr
+    };
+
+    // 如果 hea 檔有成功讀到紀錄代號，才推入第二個識別碼
+    if (recordName && recordName !== "未知" && recordName !== "--") {
+        fhirPatientResource.identifier.push({
+            use: "secondary",
+            system: "http://tzuchi.org/fhir/patient-id",
+            value: recordName
+        });
+    }
+
+    console.log("準備送出的 Patient JSON 資料：", JSON.stringify(fhirPatientResource));
+
+    return fetch('https://tzuchi-fhir.ddns.net/fhir/Patient', {
+        method: 'POST',
+        headers: { 
+            'Content-Type': 'application/fhir+json', 
+            'Accept': 'application/fhir+json' 
+        },
+        body: JSON.stringify(fhirPatientResource)
+    }).then(res => { 
+        // 💡 捕捉更詳細的錯誤訊息
+        if (!res.ok) {
+            return res.json().then(err => {
+                // FHIR 通常會在 OperationOutcome 帶有錯誤細節
+                let details = err.issue ? err.issue[0].diagnostics : "未知原因";
+                throw new Error(`伺服器拒絕請求 (400)。詳細原因: ${details}`);
+            });
+        } 
+        return res.json(); 
+    });
+}
+// 輔助函式：重設按鈕狀態
+function resetFhirButton() {
+    const fhirBtn = document.getElementById('btn-create-fhir');
+    fhirBtn.disabled = false; 
+    fhirBtn.className = "btn-fhir";
+    fhirBtn.innerText = "驗證並同步 FHIR Patient";
+}
+
+// 修改按鈕狀態為完成
+function setFhirButtonSuccess(text) {
+    const fhirBtn = document.getElementById('btn-create-fhir');
+    fhirBtn.className = "synced";
+    fhirBtn.innerText = text;
+    fhirBtn.disabled = true; // 鎖定按鈕避免誤觸
+}
+
+// 🔌 對接 FastAPI 並建立 DocumentReference
+function saveToEcgStorageAndCreateDocRef() {
+    if (!selectedDatFile) { alert("目前沒有載入任何 .dat 檔案，請先完成步驟 2。"); return; }
+    if (!fhirPatientServerId) { alert("請先點擊上方按鈕驗證或同步 FHIR Patient，以便進行檔案關聯。"); return; }
+
+    const saveBtn = document.getElementById('btn-save');
+    saveBtn.disabled = true; saveBtn.innerText = "1/2 儲存點二進位傳輸中...";
+
+    const formData = new FormData();
+    formData.append("file", selectedDatFile);
+
+    fetch('http://203.64.84.177:8000/api/upload', {
+        method: 'POST',
+        body: formData 
+    })
+    .then(response => {
+        if (!response.ok) return response.json().then(err => { throw new Error(err.detail || `回應 ${response.status}`); });
+        return response.json();
+    })
+    .then(fastApiData => {
+        saveBtn.innerText = "2/2 建立 FHIR DocumentReference 中...";
+        return createFhirDocumentReference(fastApiData.url);
+    })
+    .then(docRefData => {
+        alert(`🎉 整合流程完全成功！\n\n1. .dat 實體檔案已成功保存。\n2. FHIR DocumentReference (ID: ${docRefData.id}) 已綁定到 Patient/${fhirPatientServerId}！`);
+    })
+    .catch(error => {
+        console.error('流程失敗:', error);
+        alert(`❌ 整合流程失敗：\n${error.message}`);
+    })
+    .finally(() => { saveBtn.disabled = false; saveBtn.innerText = "儲存並打包 FHIR Document"; });
+}
+
+function createFhirDocumentReference(datFileUrl) {
+    let isoDate = new Date().toISOString(); 
+    if (ecgDate && ecgDate !== "未知") {
+        let parts = ecgDate.split('.');
+        if(parts.length === 3) isoDate = `${parts[2]}-${parts[1]}-${parts[0]}T00:00:00Z`;
+    }
+
+    // 💡 關鍵修正：直接讀取全域變數中，使用者在視窗真正輸入的姓名
+    // 如果全域變數不幸是空的，才用 Email 或 "Unknown Patient" 備用
+    const finalDisplayName = fhirPatientName || fhirPatientEmail || "Unknown Patient";
+
+    const fhirDocRef = {
+        resourceType: "DocumentReference",
+        status: "current",
+        docStatus: "final",
+        type: { coding: [{ system: "http://loinc.org", code: "11524-6", display: "ECG waveform study" }] },
+        category: [{ coding: [{ system: "http://terminology.hl7.org/CodeSystem/document-classcodes", code: "Laboratory" }] }],
+        
+        // 💡 修正這裏：使用 finalDisplayName
+        subject: { 
+            reference: `Patient/${fhirPatientServerId}`, 
+            display: finalDisplayName
+        },
+        date: isoDate,
+        author: [{ 
+            reference: `Patient/${fhirPatientServerId}`, 
+            display: finalDisplayName
+        }],
+        
+        content: [{
+            attachment: {
+                contentType: "application/octet-stream",
+                url: datFileUrl,
+                size: selectedDatFile.size,
+                title: selectedDatFile.name
+            }
+        }]
+    };
+
+    console.log("準備送出的 DocumentReference JSON 資料：", JSON.stringify(fhirDocRef));
+
+    return fetch('https://tzuchi-fhir.ddns.net/fhir/DocumentReference', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/fhir+json', 'Accept': 'application/fhir+json' },
+        body: JSON.stringify(fhirDocRef)
+    }).then(res => { if (!res.ok) throw new Error("DocumentReference 建立失敗。"); return res.json(); });
+}
+</script>
+</body>
+</html>
