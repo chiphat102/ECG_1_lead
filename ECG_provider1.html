@@ -218,6 +218,7 @@ const themeColors = {
 };
 
 // 1. 處理 .hea 檔案讀取
+// 1. 處理 .hea 檔案讀取
 document.getElementById('heaInput').addEventListener('change', function(e) {
     const file = e.target.files[0];
     if (!file) return;
@@ -227,6 +228,9 @@ document.getElementById('heaInput').addEventListener('change', function(e) {
 
     // 切換新檔案時，重設 FHIR 病人狀態
     fhirPatientServerId = null;
+    fhirPatientName = "";   // ✨ Reset on new file
+    fhirPatientEmail = "";  // ✨ Reset on new file
+    
     const fhirBtn = document.getElementById('btn-create-fhir');
     fhirBtn.className = "btn-fhir";
     fhirBtn.innerText = "驗證並同步 FHIR Patient";
@@ -555,6 +559,10 @@ function checkAndCreateFhirPatient() {
             // 如果舊紀錄的姓名跟輸入的不同，提示一下使用者
             const oldName = existingPatient.name && existingPatient.name[0] ? existingPatient.name[0].text : "未命名";
 
+            // ✨ FIX 1: Save variables to the global scope so DocumentReference can read them later!
+            fhirPatientName = oldName;
+            fhirPatientEmail = customEmail;
+
             alert(`🔍 檢索完畢：此 Email (${customEmail}) 先前已註冊過。\n系統將自動沿用既有病患：${oldName} (伺服器編號: ${fhirPatientServerId})`);
             setFhirButtonSuccess(`已沿用病患: ${oldName}`);
             return null; // 中斷 Promise 鏈，不執行後續的 POST
@@ -567,6 +575,11 @@ function checkAndCreateFhirPatient() {
     .then(newPatientData => {
         if (newPatientData) {
             fhirPatientServerId = newPatientData.id;
+
+            // ✨ FIX 2: Save variables to global scope for newly created patients!
+            fhirPatientName = customName;
+            fhirPatientEmail = customEmail;
+
             alert(`🎉 新病患建立成功！\n姓名：${customName}\nEmail：${customEmail}\n伺服器分配新 ID: ${fhirPatientServerId}`);
             setFhirButtonSuccess(`✓ ${customName} 同步成功`);
         }
@@ -662,6 +675,7 @@ function setFhirButtonSuccess(text) {
 }
 
 // 🔌 對接 FastAPI 並建立 DocumentReference
+// 🔌 對接 FastAPI 並建立 DocumentReference (已加入檔名動態附加時間戳記功能)
 function saveToEcgStorageAndCreateDocRef() {
     if (!selectedDatFile) { alert("目前沒有載入任何 .dat 檔案，請先完成步驟 2。"); return; }
     if (!fhirPatientServerId) { alert("請先點擊上方按鈕驗證或同步 FHIR Patient，以便進行檔案關聯。"); return; }
@@ -669,8 +683,31 @@ function saveToEcgStorageAndCreateDocRef() {
     const saveBtn = document.getElementById('btn-save');
     saveBtn.disabled = true; saveBtn.innerText = "1/2 儲存點二進位傳輸中...";
 
+    // 💡 產生當前的時間戳記 (格式如: 20260529_183015)
+    const now = new Date();
+    const timestamp = now.getFullYear() +
+        String(now.getMonth() + 1).padStart(2, '0') +
+        String(now.getDate()).padStart(2, '0') + '_' +
+        String(now.getHours()).padStart(2, '0') +
+        String(now.getMinutes()).padStart(2, '0') +
+        String(now.getSeconds()).padStart(2, '0');
+
+    // 💡 解析原檔名與副檔名，並組合新檔名
+    const originalName = selectedDatFile.name;
+    const lastDotIndex = originalName.lastIndexOf('.');
+    let newFileName = "";
+    
+    if (lastDotIndex !== -1) {
+        const baseName = originalName.substring(0, lastDotIndex);
+        const ext = originalName.substring(lastDotIndex); // 例如: .dat
+        newFileName = `${baseName}_${timestamp}${ext}`;
+    } else {
+        newFileName = `${originalName}_${timestamp}`;
+    }
+
     const formData = new FormData();
-    formData.append("file", selectedDatFile);
+    // 💡 關鍵修正：透過第三個參數傳入帶有時間戳記的新檔名，FastAPI 就會接收到這個新名字
+    formData.append("file", selectedDatFile, newFileName);
 
     fetch('http://203.64.84.177:8000/api/upload', {
         method: 'POST',
@@ -682,10 +719,11 @@ function saveToEcgStorageAndCreateDocRef() {
     })
     .then(fastApiData => {
         saveBtn.innerText = "2/2 建立 FHIR DocumentReference 中...";
-        return createFhirDocumentReference(fastApiData.url);
+        // 💡 將帶有新檔名的變數帶入下一個步驟，讓 FHIR 的 Title 也能同步更新
+        return createFhirDocumentReference(fastApiData.url, newFileName);
     })
     .then(docRefData => {
-        alert(`🎉 整合流程完全成功！\n\n1. .dat 實體檔案已成功保存。\n2. FHIR DocumentReference (ID: ${docRefData.id}) 已綁定到 Patient/${fhirPatientServerId}！`);
+        alert(`🎉 整合流程完全成功！\n\n1. 實體檔案已成功保存為：\n   ${newFileName}\n2. FHIR DocumentReference (ID: ${docRefData.id}) 已綁定到 Patient/${fhirPatientServerId}！`);
     })
     .catch(error => {
         console.error('流程失敗:', error);
@@ -694,16 +732,16 @@ function saveToEcgStorageAndCreateDocRef() {
     .finally(() => { saveBtn.disabled = false; saveBtn.innerText = "儲存並打包 FHIR Document"; });
 }
 
-function createFhirDocumentReference(datFileUrl) {
+function createFhirDocumentReference(datFileUrl, finalFileName) {
     let isoDate = new Date().toISOString(); 
     if (ecgDate && ecgDate !== "未知") {
         let parts = ecgDate.split('.');
         if(parts.length === 3) isoDate = `${parts[2]}-${parts[1]}-${parts[0]}T00:00:00Z`;
     }
 
-    // 💡 關鍵修正：直接讀取全域變數中，使用者在視窗真正輸入的姓名
-    // 如果全域變數不幸是空的，才用 Email 或 "Unknown Patient" 備用
     const finalDisplayName = fhirPatientName || fhirPatientEmail || "Unknown Patient";
+    // 如果沒傳入新檔名，就用原本的檔名備份
+    const displayFileName = finalFileName || selectedDatFile.name;
 
     const fhirDocRef = {
         resourceType: "DocumentReference",
@@ -712,7 +750,6 @@ function createFhirDocumentReference(datFileUrl) {
         type: { coding: [{ system: "http://loinc.org", code: "11524-6", display: "ECG waveform study" }] },
         category: [{ coding: [{ system: "http://terminology.hl7.org/CodeSystem/document-classcodes", code: "Laboratory" }] }],
         
-        // 💡 修正這裏：使用 finalDisplayName
         subject: { 
             reference: `Patient/${fhirPatientServerId}`, 
             display: finalDisplayName
@@ -728,7 +765,7 @@ function createFhirDocumentReference(datFileUrl) {
                 contentType: "application/octet-stream",
                 url: datFileUrl,
                 size: selectedDatFile.size,
-                title: selectedDatFile.name
+                title: displayFileName // 💡 這裡同步更改為帶有時間戳記的名稱
             }
         }]
     };
